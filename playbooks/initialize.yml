@@ -1,0 +1,52 @@
+---
+- hosts: ermia
+  tasks:
+  - name: Update OS
+    yum:
+      name: "*"
+      state: latest
+      exclude: kernel*
+    tags:
+      - upgrade
+
+  - name: Install Epel Package
+    yum:
+      name: "epel-release.noarch"
+      state: installed
+    tags:
+      - epel
+
+  - name: Stop firewalld
+    service:
+      name: firewalld
+      state: stopped
+      enabled: no
+    tags:
+      - firewalld
+
+  - name: disable selinux
+    selinux:
+      state: disabled      
+    tags:
+      - selinx
+
+  - name: Install Common Packages
+    yum:
+      name: "{{packages}}"
+      state: installed
+    vars:
+      packages:
+        - vim
+        - tcpdump
+        - tcptraceroute
+        - net-tools
+        - telnet
+        - unzip
+        - mtr
+        - bzip2
+        - rsync
+        - bind-utils
+        - wget
+      - bash-completion
+    tags:
+      - packages
