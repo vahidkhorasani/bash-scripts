@@ -2,6 +2,8 @@
 
 # A script to perform incremental backups using rsync
 
+echo "Test"
+
 set -o errexit
 set -o nounset
 set -o pipefail
