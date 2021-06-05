@@ -2,14 +2,12 @@
 
 # A script to perform incremental backups using rsync
 
-echo "Test"
-
 set -o errexit
 set -o nounset
 set -o pipefail
 
 readonly SOURCE_DIR="${HOME}"
-readonly BACKUP_DIR="/mnt/data/backups"
+readonly BACKUP_DIR="/mnt/backups"
 readonly DATETIME="$(date '+%Y-%m-%d_%H:%M:%S')"
 readonly BACKUP_PATH="${BACKUP_DIR}/${DATETIME}"
 readonly LATEST_LINK="${BACKUP_DIR}/latest"
