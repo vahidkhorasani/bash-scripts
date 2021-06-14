@@ -5,7 +5,7 @@ unset https_proxy
 
 PATH="/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin"
 HOSTNAME=$(hostnamectl | grep -i hostname | awk '{print $3}')
-HOST_IP=$(ifconfig | grep inet | grep -v inet6 | grep 192.168.71 | awk '{print $2}')
+HOST_IP=$(ifconfig | grep inet | grep -v inet6 | grep 192.168 | awk '{print $2}')
 ISEVERITY="info"
 WSEVERITY="warning"
 TITLE="Daily-Backup"
@@ -14,7 +14,7 @@ WDESC="Backup failed !!"
 
 # ROCKETCHAT
 ## channel: ap.backup.log
-ROCKET_WEBHOOK="http://chat.tasn.ir:3000/hooks/zvL6cyg3kQeAETjkv/RHdfHLXKfk4zcKbSnjSKHjCrbfj6EQfitTAMsjAP5EtXkf5H"
+ROCKET_WEBHOOK=""
 ROCKET_SMSG='{"alertname":"Database-Backup","emoji":":raccoon:","text":"Message Type: '$ISEVERITY' \n  Message Title: '$TITLE' \n Server IP: '$HOST_IP' \n Server Name: '$HOST_NAME' \n Description:\n '$SDESC'"}'
 ROCKET_FMSG='{"alertname":"Database-Backup","emoji":":raccoon:","text":"Message Type: '$WSEVERITY' \n  Message Title: '$TITLE' \n Server IP: '$HOST_IP' \n Server Name: '$HOST_NAME' \n Description:\n '$WDESC'"}'
 
@@ -31,24 +31,16 @@ FILE_NAME="$NAME"_"$DATE_1DA"
 BACKUP_PATH="/mnt/backup/"
 UNCOMPRESSED_BK_DIR="$BACKUP_PATH""uncompressed_archive/"
 COMPRESSED_BK_DIR="$BACKUP_PATH""compressed_archive/"
-W_BK_DIR="$UNCOMPRESSED_BK_DIR""weekly/"
-M_BK_DIR="$UNCOMPRESSED_BK_DIR""monthly/"
+W_BK_DIR="$UNCOMPRESSED_BK_DIR""weekly"
+M_BK_DIR="$UNCOMPRESSED_BK_DIR""monthly"
+DB_NAMES="/mnt/backup/.db_names"
 
 # Logs Paths
 LOGS_DIR="$BACKUP_PATH""logs/"
 EVENT_LOG="$LOGS_DIR""event.logs"
-LOG_NAME="$LOGS_DIR""backup_event.logs"
-BK_LOG="backup-progress.logs"
-BK_LOG_NAME="$LOGS_DIR""$BK_LOG"
-
-mkdir -p $UNCOMPRESSED_BK_DIR
-mkdir -p $COMPRESSED_BK_DIR
-mkdir -p $LOGS_DIR
-mkdir -p $W_BK_DIR
-mkdir -p $M_BK_DIR
 
 # NFS Paths
-NFS_DIR="/mnt/nfs-storage/mongo_backup/"
+NFS_DIR="/mnt/storage/mongo_backup/"
 DAILY_PATH="$NFS_DIR""daily/"
 WEEKLY_PATH="$NFS_DIR""weekly/"
 MONTHLY_PATH="$NFS_DIR""monthly/"
@@ -61,98 +53,130 @@ EXEC_RM=$(which rm)
 EXEC_CURL=$(which curl)
 EXEC_MV=$(which mv)
 EXEC_MKDIR=$(which mkdir)
+EXEC_MONGO=$(which mongo)
 EXEC_MONGODUMP=$(which mongodump)
+
+${EXEC_MKDIR} -p "$UNCOMPRESSED_BK_DIR"
+${EXEC_MKDIR} -p "$COMPRESSED_BK_DIR"
+${EXEC_MKDIR} -p "$LOGS_DIR"
+${EXEC_MKDIR} -p "$W_BK_DIR"
+${EXEC_MKDIR} -p "$M_BK_DIR"
+${EXEC_MKDIR} -p "$DAILY_PATH"
+${EXEC_MKDIR} -p "$WEEKLY_PATH"
+${EXEC_MKDIR} -p "$MONTHLY_PATH"
 
 # Credentials
 FLE="$BACKUP_PATH"".passwd"
+if [[ ! -f $FLE || -z $FLE ]];then
+    touch $FLE
+    cat <<- EOF
+    "Your credential file either does not exist or is empty.
+    please put your username & password in $FLE encoded in base64"
+    ----------------------------------------------------------------------------
+EOF
+exit
+fi
+
 USR=$(awk '{print $1}' $FLE | base64 -d)
 PASSWD=$(awk '{print $2}' $FLE | base64 -d)
 MONGO_HOST="127.0.0.1"
 MONGO_PORT="27017"
 AUTH_DB="admin"
 
+JQ=$(which jq)
+if [[ ! $JQ == 0 ]]; then
+	echo "Make sure you have installed jq before continuing this script !!"
+	echo "----------------------------------------------------------------"
+	exit 1
+fi
+
 # Functions
 function dailyBackup {
-        BK_FILE_NAME="$NAME"_"$DATE_0DA"
-        BK_FILE_PATH="$UNCOMPRESSED_BK_DIR""$BK_FILE_NAME"
+    BK_FILE_NAME="$NAME"_"$DATE_0DA"
+    BK_FILE_PATH="$UNCOMPRESSED_BK_DIR""$BK_FILE_NAME"
+    FULL_BK_FILE_NAME="$UNCOMPRESSED_BK_DIR""$BK_FILE_NAME-Full"
 
-        ############---COMPRESS & Remove---############
-        echo "Start Cleaning daily path , Compressing previous backup and removing the uncompressed one ... " >> $EVENT_LOG
-        echo "Uncompressed Backup File Name: $FILE_NAME " >> $EVENT_LOG
-        echo "Time Check: $(date +%Y%m%d_%H:%M:%S) " >> $EVENT_LOG
+    ############---COMPRESS & Remove---############
+    echo "Start Cleaning daily path , Compressing previous backup and removing the uncompressed one ... " >> $EVENT_LOG
+    echo "Uncompressed Backup File Name: $FILE_NAME " >> $EVENT_LOG
+    echo "Time Check: $(date +%Y%m%d_%H:%M:%S) " >> $EVENT_LOG
 
-        $EXEC_FIND $DAILY_PATH -mtime +6 -type f -exec rm -rf {} \;
-        $EXEC_FIND $COMPRESSED_BK_DIR -name '*.tar.gz' -type f -exec rm -rf {} \;
-        $EXEC_TAR cfP - $UNCOMPRESSED_BK_DIR$FILE_NAME | pigz -9 -p 25 > $COMPRESSED_BK_DIR$FILE_NAME.tar.gz
-        $EXEC_RM -rf $UNCOMPRESSED_BK_DIR$FILE_NAME
+    $EXEC_FIND $DAILY_PATH -mtime +6 -type f -exec rm -rf {} \;
+    $EXEC_FIND $COMPRESSED_BK_DIR -name '*.tar.gz' -type f -exec rm -rf {} \;
+    $EXEC_TAR cfP - $UNCOMPRESSED_BK_DIR$FILE_NAME | pigz -9 -p 25 > $COMPRESSED_BK_DIR$FILE_NAME.tar.gz
+    $EXEC_RM -rf $UNCOMPRESSED_BK_DIR$FILE_NAME
 
-        echo "Time Check: $(date +%Y%m%d_%H:%M:%S) " >> $EVENT_LOG
-        echo "...END " >> $EVENT_LOG
+    echo "Time Check: $(date +%Y%m%d_%H:%M:%S) " >> $EVENT_LOG
+    echo "...END " >> $EVENT_LOG
 
-        echo "Start Taking New Backup at $BK_FILE_PATH... " >> $EVENT_LOG
-        echo "Backup Name: $BK_FILE_NAME" >> $EVENT_LOG
-        echo "Time Check: $(date +%Y%m%d_%H:%M:%S)" >> $EVENT_LOG
+    echo "Start Taking New Backup at $BK_FILE_PATH... " >> $EVENT_LOG
+    echo "Backup Name: $BK_FILE_NAME" >> $EVENT_LOG
+    echo "Time Check: $(date +%Y%m%d_%H:%M:%S)" >> $EVENT_LOG
 
-        $EXEC_MKDIR -p "$BK_FILE_PATH"
-        cd $BK_FILE_PATH
+    $EXEC_MKDIR -p "$BK_FILE_PATH"
+    cd $BK_FILE_PATH
 
-        ${EXEC_MONGODUMP} --host=${MONGO_HOST} --port=${MONGO_PORT} --username=${USR} --password=${PASSWD} --authenticationDatabase=${AUTH_DB} --db=admin --out .
-        ${EXEC_MONGODUMP} --host=${MONGO_HOST} --port=${MONGO_PORT} --username=${USR} --password=${PASSWD} --authenticationDatabase=${AUTH_DB} --db=ap_apnsservice --out .
-        ${EXEC_MONGODUMP} --host=${MONGO_HOST} --port=${MONGO_PORT} --username=${USR} --password=${PASSWD} --authenticationDatabase=${AUTH_DB} --db=ap_hamrafigh --out .
-        ${EXEC_MONGODUMP} --host=${MONGO_HOST} --port=${MONGO_PORT} --username=${USR} --password=${PASSWD} --authenticationDatabase=${AUTH_DB} --db=ap_mobapp_appconfig --out .
-        ${EXEC_MONGODUMP} --host=${MONGO_HOST} --port=${MONGO_PORT} --username=${USR} --password=${PASSWD} --authenticationDatabase=${AUTH_DB} --db=ap_mobapp_smsgateway --out .
-        ${EXEC_MONGODUMP} --host=${MONGO_HOST} --port=${MONGO_PORT} --username=${USR} --password=${PASSWD} --authenticationDatabase=${AUTH_DB} --db=ap_mobapp_sync --out .
-        ${EXEC_MONGODUMP} --host=${MONGO_HOST} --port=${MONGO_PORT} --username=${USR} --password=${PASSWD} --authenticationDatabase=${AUTH_DB} --db=ap_tourism_engine --out .
+    PRI_NODE=$(${EXEC_MONGO} --quiet --username=${USR} --password=${PASSWD} --eval "rs.status().members.find(r=>r.state===1).name")
+    RPL_STATUS=$?
 
-        echo "Moving last compressed backup to $DAILY_PATH ..." >> $EVENT_LOG
-        echo "Time Check: $(date +%Y%m%d_%H:%M:%S) " >> $EVENT_LOG
-        $EXEC_MV $COMPRESSED_BK_DIR$FILE_NAME.tar.gz $DAILY_PATH
-        echo "Time Check: $(date +%Y%m%d_%H:%M:%S) " >> $EVENT_LOG
-        echo "...END " >> $EVENT_LOG
-        echo "Finished !" >> $EVENT_LOG
-        echo "-----------------------" >> $EVENT_LOG
+    if [[ $RPL_STATUS -eq 0 ]]; then
+        ${EXEC_MONGO} --quiet $PRI_NODE --username=${USR} --password=${PASSWD} --eval "db.getMongo().getDBNames()" | jq '.[]' | cut -d'"' -f2 > ${DB_NAMES}
+    else 
+        ${EXEC_MONGO} --quiet --username=${USR} --password=${PASSWD} --eval "db.getMongo().getDBNames()" | jq '.[]' | cut -d'"' -f2 > ${DB_NAMES}
+    fi
 
-        }
+    while read line ; do ${EXEC_MONGODUMP} --host=${MONGO_HOST} --port=${MONGO_PORT} --username=${USR} --password=${PASSWD} --authenticationDatabase=${AUTH_DB} --db=$line --out . ; done < ${DB_NAMES}
+    ${EXEC_MONGODUMP} --host=${MONGO_HOST} --port=${MONGO_PORT} --username=${USR} --password=${PASSWD} --authenticationDatabase=${AUTH_DB} --out ${FULL_BK_FILE_NAME}
+
+    echo "Moving last compressed backup to $DAILY_PATH ..." >> $EVENT_LOG
+    echo "Time Check: $(date +%Y%m%d_%H:%M:%S) " >> $EVENT_LOG
+    $EXEC_MV $COMPRESSED_BK_DIR$FILE_NAME.tar.gz $DAILY_PATH
+    echo "Time Check: $(date +%Y%m%d_%H:%M:%S) " >> $EVENT_LOG
+    echo "...END " >> $EVENT_LOG
+    echo "Finished !" >> $EVENT_LOG
+    echo "-----------------------" >> $EVENT_LOG
+
+}
 
 function weeklyBackup {
-	W_BK_FILE_PATH="$W_BK_DIR""$NAME"_"$DATE_0DA"
+    W_BK_FILE_PATH="$W_BK_DIR""$NAME"_"$DATE_0DA"
 	W_BK_FILE_NAME="$NAME"_"$DATE_0DA"
 
-        echo "Start Taking New Backup at $W_BK_FILE_PATH... " >> $EVENT_LOG
-        echo "Backup Name: $W_BK_FILE_NAME" >> $EVENT_LOG
-        echo "Time Check: $(date +%Y%m%d_%H:%M:%S)" >> $EVENT_LOG
+    echo "Start Taking New Backup at $W_BK_FILE_PATH... " >> $EVENT_LOG
+    echo "Backup Name: $W_BK_FILE_NAME" >> $EVENT_LOG
+    echo "Time Check: $(date +%Y%m%d_%H:%M:%S)" >> $EVENT_LOG
 
-        $EXEC_MKDIR -p "$W_BK_FILE_PATH"
-        cd $W_BK_FILE_PATH
+    $EXEC_MKDIR -p "$W_BK_FILE_PATH"
+    cd $W_BK_FILE_PATH
 
-        ${EXEC_MONGODUMP} --host=${MONGO_HOST} --port=${MONGO_PORT} --username=${USR} --password=${PASSWD} --authenticationDatabase=${AUTH_DB} --out ${W_BK_FILE_NAME}
+    ${EXEC_MONGODUMP} --host=${MONGO_HOST} --port=${MONGO_PORT} --username=${USR} --password=${PASSWD} --authenticationDatabase=${AUTH_DB} --out ${W_BK_FILE_NAME}
 
-        $EXEC_FIND $COMPRESSED_BK_DIR -name '*.tar.gz' -type f -exec rm -rf {} \;
+    $EXEC_FIND $COMPRESSED_BK_DIR -name '*.tar.gz' -type f -exec rm -rf {} \;
 	$EXEC_TAR cfP - $W_BK_FILE_PATH | pigz -9 -p 25 > $COMPRESSED_BK_DIR$W_BK_FILE_NAME.tar.gz
 	$EXEC_CP $COMPRESSED_BK_DIR$W_BK_FILE_NAME.tar.gz $WEEKLY_PATH
 	$EXEC_FIND $WEEKLY_PATH -mtime +13 -type f -exec rm -rf {} \;
 	#$EXEC_RM -rf $W_BK_FILE_PATH
-	}
+}
 
 function monthlyBackup {
 	M_BK_FILE_PATH="$M_BK_DIR""$NAME"_"$DATE_0DA"
 	M_BK_FILE_NAME="$NAME"_"$DATE_0DA"
 
-        echo "Start Taking New Backup at $BK_FILE_PATH... " >> $EVENT_LOG
-        echo "Backup Name: $M_BK_FILE_NAME" >> $EVENT_LOG
-        echo "Time Check: $(date +%Y%m%d_%H:%M:%S)" >> $EVENT_LOG
+    echo "Start Taking New Backup at $BK_FILE_PATH... " >> $EVENT_LOG
+    echo "Backup Name: $M_BK_FILE_NAME" >> $EVENT_LOG
+    echo "Time Check: $(date +%Y%m%d_%H:%M:%S)" >> $EVENT_LOG
 
-        $EXEC_MKDIR -p "$M_BK_FILE_PATH"
-        cd $M_BK_FILE_PATH
+    $EXEC_MKDIR -p "$M_BK_FILE_PATH"
+    cd $M_BK_FILE_PATH
 
-        ${EXEC_MONGODUMP} --host=${MONGO_HOST} --port=${MONGO_PORT} --username=${USR} --password=${PASSWD} --authenticationDatabase=${AUTH_DB} --archive=${M_BK_FILE_NAME}.archive
+    ${EXEC_MONGODUMP} --host=${MONGO_HOST} --port=${MONGO_PORT} --username=${USR} --password=${PASSWD} --authenticationDatabase=${AUTH_DB} --archive=${M_BK_FILE_NAME}.archive
 
-        $EXEC_FIND $COMPRESSED_BK_DIR -name '*.tar.gz' -type f -exec rm -rf {} \;
+    $EXEC_FIND $COMPRESSED_BK_DIR -name '*.tar.gz' -type f -exec rm -rf {} \;
 	$EXEC_TAR cfP - $M_BK_FILE_PATH | pigz -9 -p 25 > $COMPRESSED_BK_DIR$M_BK_FILE_NAME.tar.gz
 	$EXEC_CP $COMPRESSED_BK_DIR$M_BK_FILE_NAME.tar.gz $MONTHLY_PATH
 	$EXEC_FIND $MONTHLY_PATH -mtime +60 -type f -exec rm -rf {} \;
 	#$EXEC_RM -rf $M_BK_FILE_PATH
-	}
+}
 
 ############---BACKUP---############
 if [[ $1 = 'daily' ]] || [[ -z $1 ]];then
